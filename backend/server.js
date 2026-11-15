@@ -13,6 +13,35 @@ const asyncRoute = fn => (req,res,next) => Promise.resolve(fn(req,res,next)).cat
 async function log(userId, action, module, recordId, details='') { await db.execute('INSERT INTO activity_logs (user_id, action, module, record_id, details) VALUES (?,?,?,?,?)',[userId,action,module,recordId,details]); }
 const httpError=(message,status=400)=>{const error=new Error(message);error.status=status;return error;};
 const roundMoney=value=>Math.round((Number(value)||0)*100)/100;
+const INVENTORY_UNITS=['kg','g','liter','ml','pcs','bottle','pack','box','can','sack','tray','dozen','loaf','cup'];
+const INVENTORY_CATEGORIES=['Seafood','Meat','Vegetables','Fruits','Beverages','Dry Goods','Dairy','Coffee','Syrup','Packaging','Cleaning Supplies','Other Supplies'];
+const RESERVATION_EVENT_TYPES=['Regular Dining','Birthday Celebration','Buffet','Private Event','Special Occasion'];
+function normalizeReservation(body){
+  const customerName=String(body.customer_name||'').trim();
+  const contact=String(body.contact_number||'').trim();
+  const reservationDate=String(body.reservation_date||'').slice(0,10);
+  const startTime=String(body.start_time||'').slice(0,8);
+  const endTime=body.end_time?String(body.end_time).slice(0,8):null;
+  const guests=Number(body.guests);
+  const eventType=String(body.event_type||'Regular Dining').trim();
+  if(!customerName)throw httpError('Customer name is required.');
+  if(!contact)throw httpError('Contact number is required.');
+  if(!/^\d{11}$/.test(contact))throw httpError('Contact number must be exactly 11 digits.');
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(reservationDate)||Number.isNaN(new Date(reservationDate+'T00:00:00').getTime()))throw httpError('Enter a valid reservation date.');
+  if(!/^\d{2}:\d{2}(:\d{2})?$/.test(startTime))throw httpError('Enter a valid start time.');
+  if(endTime&&!/^\d{2}:\d{2}(:\d{2})?$/.test(endTime))throw httpError('Enter a valid end time.');
+  const normalizedStart=startTime.length===5?startTime+':00':startTime;
+  const normalizedEnd=endTime?(endTime.length===5?endTime+':00':endTime):null;
+  if(normalizedEnd&&normalizedEnd<=normalizedStart)throw httpError('End time must be after the start time.');
+  if(!Number.isInteger(guests)||guests<1)throw httpError('Enter a valid number of guests.');
+  if(!RESERVATION_EVENT_TYPES.includes(eventType))throw httpError('Choose a valid event type.');
+  return {
+    customer_name:customerName,contact_number:contact,reservation_date:reservationDate,
+    start_time:normalizedStart,end_time:normalizedEnd,guests,event_type:eventType,
+    table_arrangement:String(body.table_arrangement||'').trim(),
+    special_requests:String(body.special_requests||'').trim()
+  };
+}
 function cleanImage(value){
   if(value===null||value===undefined||value==='')return null;
   if(typeof value!=='string')throw httpError('Invalid image data.');
@@ -58,19 +87,64 @@ app.post('/api/auth/login', asyncRoute(async(req,res)=>{
 }));
 app.get('/api/auth/me',auth,(req,res)=>res.json({user:req.user}));
 app.get('/api/dashboard/summary',auth,allow('Owner / Manager'),asyncRoute(async(req,res)=>{
- const [[o]]=await db.query("SELECT COUNT(*) totalOrders, COALESCE(SUM(total_amount),0) sales, SUM(status IN ('Pending','Confirmed','Preparing')) pendingOrders, SUM(status='Completed') completedOrders FROM orders WHERE DATE(created_at)=CURDATE()");
- const [[i]]=await db.query('SELECT COUNT(*) totalItems, SUM(quantity <= minimum_stock) lowStock FROM inventory');
+ const [[o]]=await db.query("SELECT COUNT(*) totalOrders, COALESCE(SUM(CASE WHEN status <> 'Cancelled' THEN total_amount ELSE 0 END),0) sales, COALESCE(SUM(status IN ('Pending','Confirmed','Preparing')),0) pendingOrders, COALESCE(SUM(status='Completed'),0) completedOrders FROM orders WHERE DATE(created_at)=CURDATE()");
+ const [[i]]=await db.query('SELECT COUNT(*) totalItems, COALESCE(SUM(quantity <= minimum_stock),0) lowStock FROM inventory');
  const [[r]]=await db.query("SELECT COUNT(*) activeReservations FROM reservations WHERE reservation_date >= CURDATE() AND status IN ('Pending','Confirmed')");
  const [recent]=await db.query('SELECT id,order_number,customer_name,total_amount,status,created_at FROM orders ORDER BY created_at DESC LIMIT 6');
- const [sales]=await db.query("SELECT DATE_FORMAT(created_at,'%a') day, SUM(total_amount) amount FROM orders WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 6 DAY) AND status <> 'Cancelled' GROUP BY DATE(created_at) ORDER BY DATE(created_at)");
- res.json({ ...o,...i,...r,recent,sales });
+ const [salesTrend]=await db.query("SELECT DATE_FORMAT(created_at,'%a') day, SUM(total_amount) amount FROM orders WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 6 DAY) AND status <> 'Cancelled' GROUP BY DATE(created_at) ORDER BY DATE(created_at)");
+ res.json({ ...o,...i,...r,recent,salesTrend });
+}));
+app.get('/api/sales/today',auth,allow('Owner / Manager','Cashier / Service Staff'),asyncRoute(async(req,res)=>{
+  const [[summary]]=await db.query(`SELECT COUNT(*) transactions, COALESCE(SUM(total_amount),0) totalSales,
+    COALESCE(SUM(discount_amount),0) discounts, COALESCE(SUM(amount_paid),0) collected,
+    COALESCE(AVG(total_amount),0) averageSale, COALESCE(SUM(status IN ('Pending','Confirmed','Preparing','Ready')),0) openOrders
+    FROM orders WHERE DATE(created_at)=CURDATE() AND status <> 'Cancelled'`);
+  const [[items]]=await db.query(`SELECT COALESCE(SUM(oi.quantity),0) itemsSold
+    FROM order_items oi JOIN orders o ON o.id=oi.order_id
+    WHERE DATE(o.created_at)=CURDATE() AND o.status <> 'Cancelled'`);
+  const [payments]=await db.query(`SELECT payment_method, COUNT(*) transactions, COALESCE(SUM(total_amount),0) total
+    FROM orders WHERE DATE(created_at)=CURDATE() AND status <> 'Cancelled'
+    GROUP BY payment_method ORDER BY total DESC`);
+  const [transactions]=await db.query(`SELECT o.id,o.order_number,o.customer_name,o.order_type,o.total_amount,o.payment_method,o.status,o.created_at,u.name cashier_name
+    FROM orders o LEFT JOIN users u ON u.id=o.created_by
+    WHERE DATE(o.created_at)=CURDATE() ORDER BY o.created_at DESC LIMIT 50`);
+  res.json({date:new Date().toISOString().slice(0,10),summary:{...summary,itemsSold:items.itemsSold},payments,transactions});
 }));
 app.get('/api/notifications',auth,asyncRoute(async(req,res)=>{
-  const [lowStock]=await db.query(`SELECT id,item_name,category,unit,quantity,minimum_stock
-    FROM inventory
-    WHERE quantity <= minimum_stock
-    ORDER BY (quantity - minimum_stock) ASC, item_name ASC`);
-  res.json({lowStock,lowStockCount:lowStock.length,checkedAt:new Date().toISOString()});
+  const role=req.user.role;
+  const canSeeInventory=['Owner / Manager','Inventory Personnel'].includes(role);
+  const canSeeReservations=['Owner / Manager','Cashier / Service Staff'].includes(role);
+  let lowStock=[],expired=[],expiring=[],upcomingReservations=[];
+  if(canSeeInventory){
+    [lowStock]=await db.query(`SELECT id,item_name,category,unit,quantity,minimum_stock,expiration_date
+      FROM inventory WHERE quantity <= minimum_stock
+      ORDER BY (quantity - minimum_stock) ASC, item_name ASC`);
+    [expired]=await db.query(`SELECT id,item_name,category,unit,quantity,minimum_stock,expiration_date,
+      DATEDIFF(CURDATE(),expiration_date) days_overdue
+      FROM inventory WHERE expiration_date IS NOT NULL AND expiration_date < CURDATE()
+      ORDER BY expiration_date ASC, item_name ASC`);
+    [expiring]=await db.query(`SELECT id,item_name,category,unit,quantity,minimum_stock,expiration_date,
+      DATEDIFF(expiration_date,CURDATE()) days_remaining
+      FROM inventory WHERE expiration_date IS NOT NULL
+      AND expiration_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 2 DAY)
+      ORDER BY expiration_date ASC, item_name ASC`);
+  }
+  if(canSeeReservations){
+    [upcomingReservations]=await db.query(`SELECT r.*,u.name created_by_name,
+      TIMESTAMPDIFF(MINUTE,NOW(),TIMESTAMP(r.reservation_date,r.start_time)) minutes_until
+      FROM reservations r LEFT JOIN users u ON u.id=r.created_by
+      WHERE r.status IN ('Pending','Confirmed')
+      AND TIMESTAMP(r.reservation_date,r.start_time) >= DATE_SUB(NOW(), INTERVAL 15 MINUTE)
+      AND TIMESTAMP(r.reservation_date,r.start_time) <= DATE_ADD(NOW(), INTERVAL 48 HOUR)
+      ORDER BY r.reservation_date ASC, r.start_time ASC LIMIT 20`);
+  }
+  res.json({
+    lowStock,expired,expiring,upcomingReservations,
+    lowStockCount:lowStock.length,expiredCount:expired.length,expiringCount:expiring.length,
+    upcomingCount:upcomingReservations.length,
+    totalCount:lowStock.length+expired.length+expiring.length+upcomingReservations.length,
+    checkedAt:new Date().toISOString()
+  });
 }));
 app.get('/api/products',auth,allow('Owner / Manager','Cashier / Service Staff'),asyncRoute(async(req,res)=>{const [rows]=await db.query('SELECT * FROM products ORDER BY created_at DESC');res.json(rows)}));
 app.post('/api/products',auth,allow('Owner / Manager'),asyncRoute(async(req,res)=>{
@@ -135,8 +209,29 @@ app.delete('/api/promos/:id',auth,allow('Owner / Manager'),asyncRoute(async(req,
   await log(req.user.id,'Deleted promo','Promos',req.params.id);
   res.json({message:'Promo deleted.'});
 }));
-app.get('/api/inventory',auth,allow('Owner / Manager','Inventory Personnel'),asyncRoute(async(req,res)=>{const [rows]=await db.query('SELECT * FROM inventory ORDER BY item_name');res.json(rows)}));
-app.post('/api/inventory',auth,allow('Owner / Manager','Inventory Personnel'),asyncRoute(async(req,res)=>{const {item_name,category,unit,quantity,minimum_stock,purchase_cost,expiration_date}=req.body;if(!item_name||!unit)return res.status(400).json({message:'Item name and unit are required.'});const [r]=await db.execute('INSERT INTO inventory(item_name,category,unit,quantity,minimum_stock,purchase_cost,expiration_date) VALUES(?,?,?,?,?,?,?)',[item_name,category||'Other Supplies',unit,Number(quantity||0),Number(minimum_stock||0),Number(purchase_cost||0),expiration_date||null]);await log(req.user.id,'Added inventory item','Inventory',r.insertId,item_name);res.status(201).json({id:r.insertId})}));
+app.get('/api/inventory',auth,allow('Owner / Manager','Inventory Personnel'),asyncRoute(async(req,res)=>{const [rows]=await db.query(`SELECT *,DATEDIFF(expiration_date,CURDATE()) days_remaining,
+  CASE WHEN expiration_date IS NULL THEN 'No expiration'
+    WHEN expiration_date < CURDATE() THEN 'Expired'
+    WHEN expiration_date <= DATE_ADD(CURDATE(), INTERVAL 2 DAY) THEN 'Expiring soon'
+    ELSE 'Fresh' END expiration_status
+  FROM inventory ORDER BY item_name`);res.json(rows)}));
+app.post('/api/inventory',auth,allow('Owner / Manager','Inventory Personnel'),asyncRoute(async(req,res)=>{
+  const {item_name,category,unit,quantity,minimum_stock,purchase_cost,expiration_date}=req.body;
+  const name=String(item_name||'').trim();
+  const unitValue=String(unit||'').trim();
+  if(!name)return res.status(400).json({message:'Item name is required.'});
+  if(!INVENTORY_UNITS.includes(unitValue))return res.status(400).json({message:'Choose a valid unit from the list.'});
+  const quantityValue=Number(quantity||0),minimumValue=Number(minimum_stock||0),costValue=Number(purchase_cost||0);
+  if(!Number.isFinite(quantityValue)||quantityValue<0)return res.status(400).json({message:'Quantity cannot be negative.'});
+  if(!Number.isFinite(minimumValue)||minimumValue<0)return res.status(400).json({message:'Minimum stock cannot be negative.'});
+  if(!Number.isFinite(costValue)||costValue<0)return res.status(400).json({message:'Purchase cost cannot be negative.'});
+  let expiration=null;
+  if(expiration_date){expiration=String(expiration_date).slice(0,10);if(!/^\d{4}-\d{2}-\d{2}$/.test(expiration)||Number.isNaN(new Date(expiration+'T00:00:00').getTime()))return res.status(400).json({message:'Enter a valid expiration date.'});}
+  const categoryValue=INVENTORY_CATEGORIES.includes(category)?category:'Other Supplies';
+  const [r]=await db.execute('INSERT INTO inventory(item_name,category,unit,quantity,minimum_stock,purchase_cost,expiration_date) VALUES(?,?,?,?,?,?,?)',[name,categoryValue,unitValue,quantityValue,minimumValue,costValue,expiration]);
+  await log(req.user.id,'Added inventory item','Inventory',r.insertId,name);
+  res.status(201).json({id:r.insertId});
+}));
 app.post('/api/inventory/:id/movement',auth,allow('Owner / Manager','Inventory Personnel'),asyncRoute(async(req,res)=>{const {type,quantity,reason}=req.body;const amount=Number(quantity);if(!['Stock In','Stock Out'].includes(type)||!Number.isFinite(amount)||amount<=0)return res.status(400).json({message:'Enter a valid movement and quantity.'});const c=await db.getConnection();try{await c.beginTransaction();const [[item]]=await c.execute('SELECT * FROM inventory WHERE id=? FOR UPDATE',[req.params.id]);if(!item)throw new Error('Inventory item not found.');const next=item.quantity+(type==='Stock In'?amount:-amount);if(next<0)throw new Error('Insufficient stock. Stock cannot become negative.');await c.execute('UPDATE inventory SET quantity=? WHERE id=?',[next,item.id]);await c.execute('INSERT INTO stock_movements(inventory_id,user_id,movement_type,quantity,previous_quantity,new_quantity,reason) VALUES(?,?,?,?,?,?,?)',[item.id,req.user.id,type,amount,item.quantity,next,reason||'Manual adjustment']);await c.commit();await log(req.user.id,type,'Inventory',item.id,`${item.item_name}: ${amount} ${item.unit}`);res.json({message:'Stock updated.',quantity:next});}catch(e){await c.rollback();throw e;}finally{c.release();}}));
 app.get('/api/orders',auth,allow('Owner / Manager','Cashier / Service Staff','Kitchen Personnel'),asyncRoute(async(req,res)=>{const [rows]=req.user.role==='Kitchen Personnel'?await db.query("SELECT * FROM orders WHERE status IN ('Confirmed','Preparing','Ready') ORDER BY created_at ASC"):await db.query('SELECT * FROM orders ORDER BY created_at DESC');res.json(rows)}));
 app.get('/api/orders/:id',auth,allow('Owner / Manager','Cashier / Service Staff','Kitchen Personnel'),asyncRoute(async(req,res)=>{
@@ -204,8 +299,34 @@ app.put('/api/orders/:id/status',auth,allow('Owner / Manager','Cashier / Service
  await log(req.user.id,`Order ${status}`,'Orders',req.params.id);
  res.json({message:`Order marked ${status}.`});
 }));
-app.get('/api/reservations',auth,allow('Owner / Manager','Cashier / Service Staff'),asyncRoute(async(req,res)=>{const [rows]=await db.query('SELECT * FROM reservations ORDER BY reservation_date DESC,start_time');res.json(rows)}));
-app.post('/api/reservations',auth,allow('Owner / Manager','Cashier / Service Staff'),asyncRoute(async(req,res)=>{const {customer_name,contact_number,reservation_date,start_time,end_time,guests,event_type,table_arrangement,special_requests}=req.body;if(!customer_name||!reservation_date||!start_time||!guests)return res.status(400).json({message:'Complete the required reservation details.'});const [r]=await db.execute('INSERT INTO reservations(customer_name,contact_number,reservation_date,start_time,end_time,guests,event_type,table_arrangement,special_requests,created_by) VALUES(?,?,?,?,?,?,?,?,?,?)',[customer_name,contact_number||'',reservation_date,start_time,end_time||null,guests,event_type||'Regular Dining',table_arrangement||'',special_requests||'',req.user.id]);await log(req.user.id,'Created reservation','Reservations',r.insertId,customer_name);res.status(201).json({id:r.insertId})}));
+app.get('/api/reservations',auth,allow('Owner / Manager','Cashier / Service Staff'),asyncRoute(async(req,res)=>{const [rows]=await db.query(`SELECT r.*,u.name created_by_name,
+  TIMESTAMPDIFF(MINUTE,NOW(),TIMESTAMP(r.reservation_date,r.start_time)) minutes_until
+  FROM reservations r LEFT JOIN users u ON u.id=r.created_by
+  ORDER BY r.reservation_date DESC,r.start_time`);res.json(rows)}));
+app.post('/api/reservations',auth,allow('Owner / Manager','Cashier / Service Staff'),asyncRoute(async(req,res)=>{
+  const reservation=normalizeReservation(req.body);
+  const [r]=await db.execute('INSERT INTO reservations(customer_name,contact_number,reservation_date,start_time,end_time,guests,event_type,table_arrangement,special_requests,created_by) VALUES(?,?,?,?,?,?,?,?,?,?)',[reservation.customer_name,reservation.contact_number,reservation.reservation_date,reservation.start_time,reservation.end_time,reservation.guests,reservation.event_type,reservation.table_arrangement,reservation.special_requests,req.user.id]);
+  await log(req.user.id,'Created reservation','Reservations',r.insertId,`${reservation.customer_name} · ${reservation.reservation_date} ${reservation.start_time}`);
+  res.status(201).json({id:r.insertId,message:'Reservation created.'});
+}));
+app.put('/api/reservations/:id',auth,allow('Owner / Manager','Cashier / Service Staff'),asyncRoute(async(req,res)=>{
+  const [[existing]]=await db.execute('SELECT id FROM reservations WHERE id=? LIMIT 1',[req.params.id]);
+  if(!existing)return res.status(404).json({message:'Reservation not found.'});
+  const reservation=normalizeReservation(req.body);
+  await db.execute('UPDATE reservations SET customer_name=?,contact_number=?,reservation_date=?,start_time=?,end_time=?,guests=?,event_type=?,table_arrangement=?,special_requests=? WHERE id=?',[reservation.customer_name,reservation.contact_number,reservation.reservation_date,reservation.start_time,reservation.end_time,reservation.guests,reservation.event_type,reservation.table_arrangement,reservation.special_requests,req.params.id]);
+  await log(req.user.id,'Rescheduled reservation','Reservations',req.params.id,`${reservation.customer_name} · ${reservation.reservation_date} ${reservation.start_time}`);
+  res.json({message:'Reservation updated.'});
+}));
+app.put('/api/reservations/:id/status',auth,allow('Owner / Manager','Cashier / Service Staff'),asyncRoute(async(req,res)=>{
+  const {status}=req.body;
+  const [[reservation]]=await db.execute('SELECT * FROM reservations WHERE id=? LIMIT 1',[req.params.id]);
+  if(!reservation)return res.status(404).json({message:'Reservation not found.'});
+  const transitions={Pending:['Confirmed','Arrived','Cancelled'],Confirmed:['Arrived','Completed','Cancelled'],Arrived:['Completed','Cancelled'],Completed:[],Cancelled:[],'No-show':['Pending','Cancelled']};
+  if(!transitions[reservation.status]?.includes(status))return res.status(409).json({message:`Cannot change ${reservation.status} to ${status}.`});
+  await db.execute('UPDATE reservations SET status=? WHERE id=?',[status,req.params.id]);
+  await log(req.user.id,`Reservation ${status}`,'Reservations',req.params.id,reservation.customer_name);
+  res.json({message:`Reservation marked ${status}.`});
+}));
 app.get('/api/waste',auth,allow('Owner / Manager','Inventory Personnel'),asyncRoute(async(req,res)=>{const [rows]=await db.query('SELECT w.*,i.item_name,i.unit,u.name employee_name FROM waste_records w JOIN inventory i ON i.id=w.inventory_id LEFT JOIN users u ON u.id=w.user_id ORDER BY w.created_at DESC');res.json(rows)}));
 app.post('/api/waste',auth,allow('Owner / Manager','Inventory Personnel'),asyncRoute(async(req,res)=>{const {inventory_id,quantity,category,reason}=req.body;const amount=Number(quantity);if(!inventory_id||!amount||amount<=0)return res.status(400).json({message:'Select an item and enter a valid quantity.'});const c=await db.getConnection();try{await c.beginTransaction();const [[item]]=await c.execute('SELECT * FROM inventory WHERE id=? FOR UPDATE',[inventory_id]);if(!item||item.quantity<amount)throw new Error('Insufficient inventory for this waste record.');const cost=Number(item.purchase_cost)*amount;await c.execute('UPDATE inventory SET quantity=quantity-? WHERE id=?',[amount,inventory_id]);const [r]=await c.execute('INSERT INTO waste_records(inventory_id,user_id,quantity,category,reason,estimated_cost) VALUES(?,?,?,?,?,?)',[inventory_id,req.user.id,amount,category||'Spoiled',reason||'',cost]);await c.execute("INSERT INTO stock_movements(inventory_id,user_id,movement_type,quantity,previous_quantity,new_quantity,reason) VALUES(?,?,?,?,?,?,?)",[inventory_id,req.user.id,'Waste',amount,item.quantity,item.quantity-amount,reason||'Waste record']);await c.commit();await log(req.user.id,'Recorded food waste','Waste',r.insertId,item.item_name);res.status(201).json({id:r.insertId,estimated_cost:cost});}catch(e){await c.rollback();throw e;}finally{c.release();}}));
 app.get('/api/activity',auth,allow('Owner / Manager'),asyncRoute(async(req,res)=>{const [rows]=await db.query('SELECT a.*,u.name employee_name FROM activity_logs a LEFT JOIN users u ON u.id=a.user_id ORDER BY a.created_at DESC LIMIT 200');res.json(rows)}));

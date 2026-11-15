@@ -1,0 +1,171 @@
+/* Inventory, reservations, today's sales, and staff notification enhancements */
+
+.status.arrived{background:#e8f1f7;color:#3f7395}
+.status.no-show{background:#f2f0ed;color:#7b736a}
+.status.low-stock{background:#fff3df;color:#a36a26}
+.status.out-of-stock{background:#faece8;color:#b45545}
+.field-hint{display:block;font-size:9px;font-weight:500;line-height:1.4;color:#a1988e}
+.field input.invalid,.field select.invalid,.field textarea.invalid{border-color:#dc9f94;background:#fffaf9}
+
+/* Inventory */
+.inventory-heading-actions{flex-wrap:wrap;justify-content:flex-end}
+.inventory-stat-grid,.reservation-stat-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px;margin-bottom:15px}
+.inventory-stat,.reservation-stat{background:#fff;border:1px solid #eee9e2;border-radius:11px;padding:13px 15px;display:flex;flex-direction:column;gap:3px;box-shadow:0 3px 12px #46311c05}
+.inventory-stat span,.reservation-stat span{font-size:8px;font-weight:700;letter-spacing:.65px;text-transform:uppercase;color:#a1988e}
+.inventory-stat b,.reservation-stat b{font-size:21px;letter-spacing:-.4px;color:#3c332c}
+.inventory-stat small,.reservation-stat small{font-size:8px;color:#a1988e}
+.inventory-stat.low b{color:#a36a26}
+.inventory-stat.expired b{color:#b0483b}
+.inventory-stat.expiring b{color:#9a6b2f}
+.reservation-stat.pending b{color:#a36a26}
+.reservation-stat.arrived b{color:#3f7395}
+.reservation-stat.completed b{color:#588365}
+
+.inventory-alert-panel{padding:14px 16px;margin-bottom:15px;border-color:#f0dcc2;background:#fffdf8}
+.inventory-alert-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.inventory-alert-title{display:flex;align-items:flex-start;gap:8px;color:#a46a2f}
+.inventory-alert-title b{display:block;font-size:11px;color:#5e4632}
+.inventory-alert-title span{display:block;font-size:9px;color:#a1988e;margin-top:2px}
+.inventory-alert-tags{display:flex;gap:6px;flex-wrap:wrap}
+.inventory-alert-tag{border:1px solid #eee3d5;background:#fff;color:#7a6a5b;border-radius:20px;padding:4px 9px;font-size:8px;font-weight:700}
+.inventory-alert-tag b{margin-left:3px}
+.inventory-alert-tag.expired{border-color:#f0d3cc;color:#a44e42;background:#fff8f6}
+.inventory-alert-tag.expiring{border-color:#f0dfb4;color:#94661f;background:#fffdf2}
+.inventory-alert-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:7px}
+.inventory-alert-item{display:flex;align-items:center;gap:8px;border:1px solid #f0ebe5;padding:7px 9px;border-radius:8px;background:#fff;min-width:0}
+.inventory-alert-item.expired{background:#fff8f6;border-color:#f1d4cc}
+.inventory-alert-item.expiring{background:#fffdf2;border-color:#f1e2ba}
+.inventory-alert-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.inventory-alert-item.expired .inventory-alert-dot{background:#c25c4b}
+.inventory-alert-item.expiring .inventory-alert-dot{background:#d3a53c}
+.inventory-alert-item>div{min-width:0;flex:1}
+.inventory-alert-item b{display:block;font-size:10px;color:#4c4138;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.inventory-alert-item small{display:block;font-size:8px;color:#a1988e;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.inventory-alert-qty{font-size:9px;color:#8a7d71;white-space:nowrap}
+.inventory-alert-more{font-size:9px;color:#a1988e;padding:7px}
+
+.inventory-filter-row,.reservation-filter-row{display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap;padding-bottom:14px;margin-bottom:14px;border-bottom:1px solid #f1ede8}
+.inventory-filter-label{display:flex;align-items:center;gap:5px;font-size:9px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#a1988e;padding-bottom:8px}
+.filter-select{display:flex;flex-direction:column;gap:3px;font-size:8px;text-transform:uppercase;letter-spacing:.5px;color:#a1988e;font-weight:700}
+.filter-select select{border:1px solid #e9e2d9;border-radius:7px;padding:7px 9px;background:#fff;color:#66594d;font-size:10px;min-width:130px;max-width:180px;outline:none}
+.filter-select select:focus{border-color:#b28a63;box-shadow:0 0 0 3px #b28a6317}
+.filter-reset{align-self:flex-end;margin-bottom:1px}
+
+.inventory-table th:last-child,.inventory-table td:last-child{white-space:nowrap}
+.inventory-row.row-expired td{background:#fdf0ed}
+.inventory-row.row-expiring td{background:#fff8df}
+.inventory-row.row-expired:hover td{background:#fbe8e4}
+.inventory-row.row-expiring:hover td{background:#fff3c9}
+.inventory-row.row-expired td:first-child{box-shadow:inset 3px 0 #c25c4b}
+.inventory-row.row-expiring td:first-child{box-shadow:inset 3px 0 #d3a53c}
+.expiry-date{font-size:10px;color:#756b62}
+.expiry-badge{display:inline-flex;align-items:center;border-radius:20px;padding:4px 7px;font-size:8px;font-weight:700;white-space:nowrap;background:#f2f0ed;color:#7b736a}
+.expiry-badge.expired{background:#faece8;color:#b0483b}
+.expiry-badge.expiring{background:#fff3d1;color:#966a17}
+.expiry-badge.fresh{background:#edf5ef;color:#588365}
+.expiry-badge.none{background:#f2f0ed;color:#7b736a}
+.expiry-preview{display:flex;align-items:center;gap:6px;border-radius:8px;padding:8px 10px;font-size:9px;font-weight:600;background:#f7f4ef;color:#7b6b5d;border:1px solid #eee7df}
+.expiry-preview.expired{background:#fff4f1;border-color:#f0d3cc;color:#a44e42}
+.expiry-preview.expiring{background:#fff9e7;border-color:#f0dfb4;color:#94661f}
+.expiry-preview.fresh{background:#f2f8f4;border-color:#dbeade;color:#588365}
+.inventory-modal,.reservation-modal{width:min(610px,100%)}
+
+/* Reservations */
+.reservation-alert-panel{padding:14px 16px;margin-bottom:15px;background:#fdfaf5;border-color:#efe3d4}
+.reservation-alert-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:11px}
+.reservation-alert-title{display:flex;align-items:flex-start;gap:8px;color:#8b684b}
+.reservation-alert-title b{display:block;font-size:11px;color:#5e4632}
+.reservation-alert-title span{display:block;font-size:9px;color:#a1988e;margin-top:2px}
+.reservation-alert-live{display:flex;align-items:center;gap:5px;font-size:8px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#7c9b7f}
+.reservation-alert-live i{width:6px;height:6px;border-radius:50%;background:#78a57e}
+.upcoming-event-strip{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:9px}
+.upcoming-event-card{background:#fff;border:1px solid #eee9e2;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;gap:3px;min-width:0}
+.upcoming-event-top{display:flex;justify-content:space-between;align-items:center;gap:6px}
+.upcoming-event-icon{width:26px;height:26px;border-radius:8px;background:#f4ebe1;color:#8b684b;display:grid;place-items:center}
+.upcoming-countdown{font-size:8px;font-weight:700;color:#8b684b;background:#f7f0e7;border-radius:20px;padding:3px 6px;white-space:nowrap}
+.upcoming-event-card>b{font-size:11px;color:#3c332c;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.upcoming-event-type{font-size:9px;color:#8a7d71;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.upcoming-event-card small{display:flex;align-items:center;gap:4px;font-size:8px;color:#a1988e;margin-top:2px}
+.upcoming-event-card em{font-style:normal;font-size:8px;color:#a46a2f;background:#fff8ec;border-radius:5px;padding:3px 5px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.upcoming-event-more{display:flex;align-items:center;justify-content:center;border:1px dashed #e6d9ca;border-radius:10px;padding:14px;font-size:9px;color:#a1988e;text-align:center}
+.reservation-row.row-today td{background:#fffdf7}
+.reservation-row.row-today td:first-child{box-shadow:inset 3px 0 #c49a5a}
+.reservation-contact,.reservation-date,.reservation-guests{display:inline-flex;align-items:center;gap:4px;font-size:10px;color:#756b62}
+.reservation-note{display:flex;align-items:center;gap:3px;max-width:230px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#a46a2f}
+.reservation-actions{flex-wrap:wrap;max-width:310px}
+.reservation-actions .mini-btn{display:inline-flex;align-items:center;gap:3px}
+
+/* Today's sales */
+.today-sales-panel{padding:16px 18px;margin-bottom:15px}
+.today-sales-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:12px}
+.today-sales-head h3{font-size:13px;margin:3px 0 0;color:#3c332c}
+.today-sales-head p{display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:9px;color:#a1988e;margin:4px 0 0}
+.today-sales-refresh{padding:8px 11px;font-size:10px}
+.today-sales-metrics{display:grid;grid-template-columns:1.35fr repeat(3,1fr);gap:9px;margin-bottom:13px}
+.today-sales-metric{position:relative;background:#faf9f6;border:1px solid #f0ebe5;border-radius:9px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.today-sales-metric.main{background:#f7f0e7;border-color:#eee1d3}
+.today-sales-metric>span{font-size:8px;text-transform:uppercase;letter-spacing:.6px;color:#a1988e;font-weight:700}
+.today-sales-metric>b{font-size:19px;color:#3c332c;letter-spacing:-.4px}
+.today-sales-metric.main>b{color:#6f4e37;font-size:21px}
+.today-sales-metric small{font-size:8px;color:#a1988e}
+.today-sales-metric-icon{position:absolute;right:10px;top:9px;width:24px;height:24px;border-radius:7px;display:grid;place-items:center;background:#f1ebe4;color:#8b684b}
+.today-sales-body{display:grid;grid-template-columns:minmax(220px,.75fr) 1.25fr;gap:12px}
+.today-payment-breakdown,.today-transactions{border:1px solid #f0ebe5;border-radius:9px;padding:10px 11px;min-width:0}
+.today-sales-section-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
+.today-sales-section-head b{font-size:10px;color:#3c332c}
+.today-sales-section-head span{font-size:8px;color:#a1988e}
+.today-payment-list{display:flex;flex-direction:column;gap:6px}
+.today-payment-row{display:flex;align-items:center;gap:7px;padding:6px 0;border-bottom:1px solid #f6f2ed}
+.today-payment-row:last-child{border-bottom:0}
+.today-payment-icon{width:24px;height:24px;border-radius:7px;background:#f7f0e8;color:#8b684b;display:grid;place-items:center;flex-shrink:0}
+.today-payment-row>div{flex:1;min-width:0}
+.today-payment-row b{display:block;font-size:9px;color:#4c4138}
+.today-payment-row small{display:block;font-size:8px;color:#a1988e}
+.today-payment-row strong{font-size:10px;color:#3c332c;white-space:nowrap}
+.today-payment-empty{font-size:9px;color:#a1988e;padding:10px 0}
+.today-sales-note{font-size:8px;color:#a1988e;line-height:1.45;margin:8px 0 0}
+.today-transaction-list{display:flex;flex-direction:column;gap:1px;max-height:200px;overflow-y:auto;padding-right:2px}
+.today-transaction{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid #f6f2ed}
+.today-transaction:last-child{border-bottom:0}
+.today-transaction.cancelled{opacity:.65}
+.today-transaction-main{flex:1;min-width:0}
+.today-transaction-main b{display:block;font-size:9px;color:#8b6748}
+.today-transaction-main small{display:block;font-size:8px;color:#a1988e;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.today-transaction-amount{text-align:right;min-width:72px}
+.today-transaction-amount b{display:block;font-size:10px;color:#3c332c}
+.today-transaction-amount small{display:block;font-size:8px;color:#a1988e;margin-top:1px}
+.today-transaction-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-height:120px;color:#b0a69b;text-align:center}
+.today-transaction-empty b{font-size:10px;color:#776b60}
+.today-transaction-empty span{font-size:8px}
+
+/* Staff notification groups */
+.notification-list{max-height:390px;overflow-y:auto}
+.notification-group-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 15px;background:#faf9f6;border-bottom:1px solid #f2eee9;font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#8a7d71}
+.notification-group-head span{display:flex;align-items:center;gap:5px}
+.notification-group-head b{font-size:9px;min-width:18px;height:18px;border-radius:20px;background:#f0ebe5;color:#7b6b5d;display:grid;place-items:center;padding:0 5px}
+.notification-group-head.expired{color:#a44e42;background:#fdf4f1}
+.notification-group-head.expired b{background:#f6ddd7;color:#a44e42}
+.notification-group-head.expiring{color:#9a6b2f;background:#fff9ec}
+.notification-group-head.expiring b{background:#f7e8c9;color:#9a6b2f}
+.notification-group-head.event{color:#3f7395;background:#f3f8fb}
+.notification-group-head.event b{background:#ddecf5;color:#3f7395}
+.notification-item-expired{background:#fffafa}
+.notification-item-expiring{background:#fffdf7}
+.notification-alert-icon.expired{background:#faece8;color:#b0483b}
+.notification-alert-icon.expiring{background:#fff2cf;color:#a47b42}
+.notification-alert-icon.event{background:#eaf2f8;color:#3f7395}
+.notification-expiry{text-align:right;font-size:8px;font-weight:700;white-space:nowrap}
+.notification-expiry b{display:block;font-size:8px}
+.notification-expiry small{display:block;font-size:7px;color:#a1988e;font-weight:500;margin-top:2px}
+.notification-expiry.expired b{color:#b0483b}
+.notification-expiry.expiring b{color:#9a6b2f}
+.notification-countdown{font-size:8px;font-weight:700;color:#3f7395;background:#eef5fa;border-radius:20px;padding:3px 6px;white-space:nowrap;text-align:center}
+.notification-item-main small+small{margin-top:2px}
+.notification-more{width:100%;border:0;border-bottom:1px solid #f4f0eb;background:#fcfbf9;padding:7px 15px;font-size:8px;font-weight:700;color:#8b684b;text-align:left}
+.notification-more:hover{background:#f7f2ec}
+.notification-foot-actions{display:flex;gap:9px;align-items:center}
+
+@media(max-width:1150px){.today-sales-body{grid-template-columns:1fr}.today-sales-metrics{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:850px){.inventory-stat-grid,.reservation-stat-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:700px){.inventory-heading-actions{width:100%}.inventory-heading-actions>*{flex:1}.inventory-filter-row,.reservation-filter-row{gap:6px}.filter-select{flex:1;min-width:120px}.filter-select select{width:100%;min-width:0;max-width:none}.inventory-alert-list,.upcoming-event-strip{grid-template-columns:1fr}}
+@media(max-width:520px){.inventory-stat-grid,.reservation-stat-grid{gap:8px}.inventory-stat,.reservation-stat{padding:11px 12px}.inventory-stat b,.reservation-stat b{font-size:18px}.today-sales-panel{padding:13px}.today-sales-head{flex-direction:column}.today-sales-refresh{width:100%}.today-sales-metrics{grid-template-columns:1fr 1fr}.inventory-filter-label{width:100%;padding-bottom:0}.filter-select{width:100%}.filter-reset{width:100%}.reservation-actions{max-width:none}.reservation-actions .mini-btn{flex:1;justify-content:center}}

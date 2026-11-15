@@ -164,6 +164,7 @@ export default function POSPage({ user }) {
         items: cart.map(item => ({ product_id: item.id, quantity: item.qty }))
       });
       setReceipt(data);
+      window.dispatchEvent(new Event('cm:sales-updated'));
       setCart([]);
       setPromoId('');
       setCustomerName('');
