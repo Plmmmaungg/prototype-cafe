@@ -242,6 +242,18 @@ app.post('/api/inventory',auth,allow('Owner / Manager','Inventory Personnel'),as
   await log(req.user.id,'Added inventory item','Inventory',r.insertId,name);
   res.status(201).json({id:r.insertId});
 }));
+app.delete('/api/inventory/:id',auth,allow('Owner / Manager','Inventory Personnel'),asyncRoute(async(req,res)=>{
+  const [[item]]=await db.execute('SELECT id,item_name FROM inventory WHERE id=? LIMIT 1',[req.params.id]);
+  if(!item)return res.status(404).json({message:'Inventory item not found.'});
+  const [[movementCount]]=await db.execute('SELECT COUNT(*) AS total FROM stock_movements WHERE inventory_id=?',[item.id]);
+  const [[wasteCount]]=await db.execute('SELECT COUNT(*) AS total FROM waste_records WHERE inventory_id=?',[item.id]);
+  if(Number(movementCount.total)>0||Number(wasteCount.total)>0){
+    return res.status(409).json({message:'This item has stock movement or waste history and cannot be deleted without losing audit records. Keep the item in inventory and set its quantity to zero instead.'});
+  }
+  await db.execute('DELETE FROM inventory WHERE id=?',[item.id]);
+  await log(req.user.id,'Deleted inventory item','Inventory',item.id,item.item_name);
+  res.json({message:'Inventory item deleted.',id:item.id});
+}));
 app.put('/api/inventory/:id',auth,allow('Owner / Manager','Inventory Personnel'),asyncRoute(async(req,res)=>{
   const [[existing]]=await db.execute('SELECT * FROM inventory WHERE id=? LIMIT 1',[req.params.id]);
   if(!existing)return res.status(404).json({message:'Inventory item not found.'});

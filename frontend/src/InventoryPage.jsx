@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle, ArrowDownToLine, ArrowUpFromLine, CalendarClock, CheckCircle2, ChevronRight,
-  Download, MoreHorizontal, Package, PackageX, Plus, Printer, RefreshCw, Search,
+  Download, Pencil, Package, PackageX, Plus, Printer, RefreshCw, Search, Trash2,
   SlidersHorizontal, X
 } from 'lucide-react';
 import api from './api';
@@ -307,6 +307,7 @@ export default function InventoryPage({ user }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('All');
@@ -519,6 +520,23 @@ export default function InventoryPage({ user }) {
     emitInventoryUpdate();
   };
 
+  const handleDelete = async row => {
+    const confirmed = window.confirm(`Delete \"${row.item_name}\" from inventory? This action cannot be undone.`);
+    if (!confirmed) return;
+    setDeletingId(row.id);
+    try {
+      await api.delete(`/inventory/${row.id}`);
+      setRows(current => current.filter(item => item.id !== row.id));
+      if (detailId === row.id) setDetailId(null);
+      notify(`${row.item_name} deleted from inventory.`);
+      emitInventoryUpdate();
+    } catch (err) {
+      notify(err.response?.data?.message || 'Unable to delete this inventory item.', 'error');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   const selectedRow = detailId ? decoratedRows.find(row => row.id === detailId) : null;
   const expiringItems = [...decoratedRows.filter(row => row.expiry.key === 'expired'), ...decoratedRows.filter(row => row.expiry.key === 'expiring')];
 
@@ -606,10 +624,10 @@ export default function InventoryPage({ user }) {
       {loading ? <div className="loading-state">Loading inventory...</div> : filtered.length === 0
         ? <div className="empty-state"><Package size={28} /><b>{rows.length ? 'No items match your filters' : 'No inventory items yet'}</b><span>{rows.length ? 'Try changing or clearing the filters above.' : 'Add an inventory item to start monitoring stock and expiration.'}</span>{rows.length > 0 && activeFilters && <button className="mini-btn" onClick={clearFilters}>Clear filters</button>}</div>
         : <div className="table-scroll"><table className="inventory-table">
-          <thead><tr><th>Ingredient</th><th>Category</th><th>On hand</th><th>Minimum</th><th>Expiration date</th><th>Expiration status</th><th>Stock status</th><th>Stock movement</th></tr></thead>
+          <thead><tr><th>Ingredient</th><th>Category</th><th>On hand</th><th>Minimum</th><th>Expiration date</th><th>Expiration status</th><th>Stock status</th><th>Actions</th></tr></thead>
           <tbody>{filtered.map(row => {
             const expiredWithStock = row.expiry.key === 'expired' && Number(row.quantity) > 0;
-            return <tr key={row.id} id={`inventory-item-${row.id}`} className={`inventory-row row-${row.expiry.key} ${focusId === row.id ? 'focus-row' : ''}`}>
+            return <tr key={row.id} id={`inventory-item-${row.id}`} className={`inventory-row row-${row.expiry.key} ${row.stock.key === 'out-of-stock' || row.expiry.key === 'expired' ? 'row-alert-edge' : ''} ${focusId === row.id ? 'focus-row' : ''}`}>
               <td><b>{row.item_name}</b><small className="cell-sub">{row.unit}</small></td>
               <td>{row.category}</td>
               <td><div className={`inventory-qty-cell ${expiredWithStock ? 'unusable' : ''}`}><b>{formatQuantity(row.quantity)}</b><span>{row.unit}</span>{expiredWithStock && <small>Not usable</small>}</div></td>
@@ -617,12 +635,13 @@ export default function InventoryPage({ user }) {
               <td><span className="expiry-date">{formatInventoryDate(row.expiration_date)}</span></td>
               <td><span className={`expiry-badge ${row.expiry.key}`}>{row.expiry.label}</span></td>
               <td><span className={`status ${row.stock.key}`}>{row.stock.label}</span></td>
-              <td><div className="inventory-row-actions">
-                {expiredWithStock
-                  ? <button className="mini-btn danger" onClick={() => openMovement(row, 'Remove Expired')} title="Remove expired quantity and record a stock-out"><PackageX size={13} /> Remove expired</button>
-                  : <button className="mini-btn stock-in" onClick={() => openMovement(row, 'Stock In')} title={row.expiry.key === 'expired' ? 'Restock this expired item with a new batch' : 'Add stock'}><ArrowDownToLine size={13} /> {row.expiry.key === 'expired' ? 'Restock' : 'Stock in'}</button>}
-                {!expiredWithStock && Number(row.quantity) > 0 && <button className="mini-btn stock-out" onClick={() => openMovement(row, 'Stock Out')} title="Remove stock"><ArrowUpFromLine size={13} /> Stock out</button>}
-                <button className="mini-btn subtle icon-only" onClick={() => setDetailId(row.id)} title={`View ${row.item_name} details`} aria-label={`View ${row.item_name} details`}><MoreHorizontal size={14} /></button>
+              <td><div className="inventory-row-actions inventory-icon-actions">
+                <button type="button" className="inventory-icon-btn edit" onClick={() => setDetailId(row.id)} title={`Edit ${row.item_name}`} aria-label={`Edit ${row.item_name}`}>
+                  <Pencil size={15} />
+                </button>
+                <button type="button" className="inventory-icon-btn delete" onClick={() => handleDelete(row)} disabled={deletingId === row.id} title={`Delete ${row.item_name}`} aria-label={`Delete ${row.item_name}`}>
+                  <Trash2 size={15} />
+                </button>
               </div></td>
             </tr>;
           })}</tbody>

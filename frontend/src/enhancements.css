@@ -58,11 +58,8 @@
 .filter-reset{align-self:flex-end;margin-bottom:1px}
 
 .inventory-table th:last-child,.inventory-table td:last-child{white-space:nowrap}
-.inventory-row.row-expired td{background:#fdf0ed}
 .inventory-row.row-expiring td{background:#fff8df}
-.inventory-row.row-expired:hover td{background:#fbe8e4}
 .inventory-row.row-expiring:hover td{background:#fff3c9}
-.inventory-row.row-expired td:first-child{box-shadow:inset 3px 0 #c25c4b}
 .inventory-row.row-expiring td:first-child{box-shadow:inset 3px 0 #d3a53c}
 .expiry-date{font-size:10px;color:#756b62}
 .expiry-badge{display:inline-flex;align-items:center;border-radius:20px;padding:4px 7px;font-size:8px;font-weight:700;white-space:nowrap;background:#f2f0ed;color:#7b736a}
@@ -178,6 +175,13 @@
 
 /* Inventory stock movement and item detail polish */
 .inventory-row-actions{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.inventory-row.row-alert-edge td:first-child{box-shadow:inset 3px 0 #c25c4b}
+.inventory-icon-actions{display:flex;align-items:center;justify-content:flex-start;gap:7px;white-space:nowrap}
+.inventory-icon-btn{width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;border:1px solid #e9e2d9;border-radius:7px;background:#fff;color:#827365;cursor:pointer;transition:background .18s,border-color .18s,color .18s}
+.inventory-icon-btn.edit:hover{background:#f5f0e9;border-color:#d9c8b5;color:#76583d}
+.inventory-icon-btn.delete{color:#b45a4d}
+.inventory-icon-btn.delete:hover{background:#fff2ef;border-color:#edc9c2;color:#a43e32}
+.inventory-icon-btn:disabled{opacity:.45;cursor:wait}
 .mini-btn.stock-in{display:inline-flex;align-items:center;gap:4px;background:#edf5ef;border-color:#d6e7da;color:#4e7b5b}
 .mini-btn.stock-in:hover{background:#e1efe4;border-color:#c2dcc8}
 .mini-btn.stock-out{display:inline-flex;align-items:center;gap:4px;background:#fff7ea;border-color:#f0dfc2;color:#966a17}
