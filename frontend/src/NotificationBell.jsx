@@ -18,6 +18,25 @@ const emptyData = {
   totalCount: 0
 };
 
+const alertKeyFor = (group, item) => {
+  if (group === 'lowStock') return `low-stock:${item.id}:${Number(item.minimum_stock || 0)}:${Number(item.quantity) <= 0 ? 'out' : 'low'}`;
+  if (group === 'expired') return `expired:${item.id}:${item.expiration_date || ''}`;
+  if (group === 'expiring') return `expiring:${item.id}:${item.expiration_date || ''}`;
+  if (group === 'upcoming') return `reservation:${item.id}:${item.reservation_date || ''}:${item.start_time || ''}`;
+  return `${group}:${item.id}`;
+};
+
+const dismissedStorageKey = user => `cm_dismissed_alerts_${user?.id || 'guest'}`;
+
+const readDismissed = user => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(dismissedStorageKey(user)) || '[]');
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return new Set();
+  }
+};
+
 const formatAlertTime = value => {
   if (!value) return '';
   const [hours, minutes] = String(value).split(':').map(Number);
@@ -45,6 +64,7 @@ export default function NotificationBell({ user }) {
   const [data, setData] = useState(emptyData);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [dismissed, setDismissed] = useState(() => readDismissed(user));
   const wrapRef = useRef(null);
   const navigate = useNavigate();
   const canViewInventory = ['Owner / Manager', 'Inventory Personnel'].includes(user?.role);
@@ -54,13 +74,32 @@ export default function NotificationBell({ user }) {
     setError('');
     try {
       const response = await api.get('/notifications');
-      setData({ ...emptyData, ...response.data });
+      const nextData = { ...emptyData, ...response.data };
+      const currentKeys = new Set([
+        ...nextData.expired.map(item => alertKeyFor('expired', item)),
+        ...nextData.expiring.map(item => alertKeyFor('expiring', item)),
+        ...nextData.lowStock.map(item => alertKeyFor('lowStock', item)),
+        ...nextData.upcomingReservations.map(item => alertKeyFor('upcoming', item))
+      ]);
+      setDismissed(current => {
+        const next = new Set([...current].filter(key => currentKeys.has(key)));
+        return next.size === current.size ? current : next;
+      });
+      setData(nextData);
     } catch (err) {
       setError(err.response?.data?.message || 'Could not load notifications.');
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(dismissedStorageKey(user), JSON.stringify([...dismissed]));
+    } catch {
+      // Notification state is still kept in memory when storage is unavailable.
+    }
+  }, [dismissed, user]);
 
   useEffect(() => {
     load();
@@ -90,15 +129,6 @@ export default function NotificationBell({ user }) {
     };
   }, [open]);
 
-  const counts = {
-    expired: Number(data.expiredCount || data.expired.length || 0),
-    expiring: Number(data.expiringCount || data.expiring.length || 0),
-    lowStock: Number(data.lowStockCount || data.lowStock.length || 0),
-    upcoming: Number(data.upcomingCount || data.upcomingReservations.length || 0)
-  };
-  const stockAlerts = counts.expired + counts.expiring + counts.lowStock;
-  const count = Number(data.totalCount ?? (stockAlerts + counts.upcoming));
-
   const toggle = () => {
     if (!open) load();
     setOpen(current => !current);
@@ -109,10 +139,28 @@ export default function NotificationBell({ user }) {
     navigate(path);
   };
 
-  const groups = [
+  const openAlert = (group, item) => {
+    setDismissed(current => {
+      const next = new Set(current);
+      next.add(alertKeyFor(group, item));
+      return next;
+    });
+    setOpen(false);
+    if (group === 'upcoming') {
+      navigate(`/reservations?focus=${item.id}`);
+      return;
+    }
+    const params = new URLSearchParams({ focus: String(item.id) });
+    if (group === 'lowStock') params.set('stock', 'low-stock');
+    if (group === 'expired') params.set('expiry', 'expired');
+    if (group === 'expiring') params.set('expiry', 'expiring');
+    navigate(`/inventory?${params.toString()}`);
+  };
+
+  const rawGroups = [
     {
       key: 'expired', title: 'Expired items', tone: 'expired', icon: <AlertTriangle size={13} />,
-      items: data.expired, render: item => <div className="notification-item notification-item-expired" key={item.id}>
+      items: data.expired, render: item => <button type="button" className="notification-item notification-item-expired" key={item.id} onClick={() => openAlert('expired', item)} title={`Open ${item.item_name} in Inventory`}>
         <div className="notification-alert-icon expired"><AlertTriangle size={15} /></div>
         <div className="notification-item-main">
           <b>{item.item_name}</b>
@@ -122,11 +170,12 @@ export default function NotificationBell({ user }) {
           <b>Expired</b>
           <small>{formatInventoryDate(item.expiration_date)}</small>
         </div>
-      </div>
+        <ChevronRight size={13} className="notification-open-cue" />
+      </button>
     },
     {
       key: 'expiring', title: 'Expiring within 2 days', tone: 'expiring', icon: <Clock3 size={13} />,
-      items: data.expiring, render: item => <div className="notification-item notification-item-expiring" key={item.id}>
+      items: data.expiring, render: item => <button type="button" className="notification-item notification-item-expiring" key={item.id} onClick={() => openAlert('expiring', item)} title={`Open ${item.item_name} in Inventory`}>
         <div className="notification-alert-icon expiring"><Clock3 size={15} /></div>
         <div className="notification-item-main">
           <b>{item.item_name}</b>
@@ -136,11 +185,12 @@ export default function NotificationBell({ user }) {
           <b>{expiryCountdown(item)}</b>
           <small>{formatInventoryDate(item.expiration_date)}</small>
         </div>
-      </div>
+        <ChevronRight size={13} className="notification-open-cue" />
+      </button>
     },
     {
       key: 'upcoming', title: 'Upcoming reservations & events', tone: 'event', icon: <CalendarDays size={13} />,
-      items: data.upcomingReservations, render: item => <div className="notification-item notification-item-event" key={item.id}>
+      items: data.upcomingReservations, render: item => <button type="button" className="notification-item notification-item-event" key={item.id} onClick={() => openAlert('upcoming', item)} title={`Open ${item.customer_name} reservation`}>
         <div className="notification-alert-icon event"><CalendarDays size={15} /></div>
         <div className="notification-item-main">
           <b>{item.customer_name}</b>
@@ -148,11 +198,12 @@ export default function NotificationBell({ user }) {
           <small>{formatInventoryDate(item.reservation_date)} · {formatAlertTime(item.start_time)}</small>
         </div>
         <div className="notification-countdown">{formatCountdown(item.minutes_until)}</div>
-      </div>
+        <ChevronRight size={13} className="notification-open-cue" />
+      </button>
     },
     {
       key: 'lowStock', title: 'Low stock', tone: 'low', icon: <Package size={13} />,
-      items: data.lowStock, render: item => <div className="notification-item" key={item.id}>
+      items: data.lowStock, render: item => <button type="button" className="notification-item" key={item.id} onClick={() => openAlert('lowStock', item)} title={`Open ${item.item_name} in Inventory`}>
         <div className="notification-alert-icon"><AlertTriangle size={15} /></div>
         <div className="notification-item-main">
           <b>{item.item_name}</b>
@@ -162,9 +213,16 @@ export default function NotificationBell({ user }) {
           {Number(item.quantity)}{item.unit ? ` ${item.unit}` : ''} left
           <small>min {Number(item.minimum_stock)}{item.unit ? ` ${item.unit}` : ''}</small>
         </div>
-      </div>
+        <ChevronRight size={13} className="notification-open-cue" />
+      </button>
     }
-  ].filter(group => group.items.length > 0);
+  ];
+  const groups = rawGroups
+    .map(group => ({ ...group, items: group.items.filter(item => !dismissed.has(alertKeyFor(group.key, item))) }))
+    .filter(group => group.items.length > 0);
+  const counts = Object.fromEntries(groups.map(group => [group.key, group.items.length]));
+  const stockAlerts = Number(counts.expired || 0) + Number(counts.expiring || 0) + Number(counts.lowStock || 0);
+  const count = stockAlerts + Number(counts.upcoming || 0);
 
   return <div className="notification-wrap" ref={wrapRef}>
     <button
@@ -199,7 +257,7 @@ export default function NotificationBell({ user }) {
               {group.items.length > 5 && <button type="button" className="notification-more" onClick={() => goTo(group.key === 'upcoming' ? '/reservations' : '/inventory')}>+ {group.items.length - 5} more {group.key === 'upcoming' ? 'booking(s)' : 'item(s)'}</button>}
             </div>)}
           </div>
-          : !error && <div className="notification-empty"><CheckCircle2 size={24} /><b>All clear</b><span>No low-stock, expiration, or upcoming reservation alerts.</span></div>}
+          : !error && <div className="notification-empty"><CheckCircle2 size={24} /><b>No open alerts</b><span>Dismissed alerts stay in Inventory until the stock or expiration issue is resolved.</span></div>}
 
       {count > 0 && <div className="notification-panel-foot">
         <span>{count} alert{count === 1 ? '' : 's'} need attention</span>

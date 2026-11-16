@@ -50,10 +50,15 @@ export const expirationInfo = (value, now = new Date()) => {
   return { key: 'fresh', label: 'Fresh', dateLabel, days };
 };
 
-export const stockInfo = row => {
+export const isExpired = (row, now = new Date()) => expirationInfo(row.expiration_date, now).key === 'expired';
+
+export const usableQuantity = (row, now = new Date()) => isExpired(row, now) ? 0 : Number(row.quantity || 0);
+
+export const stockInfo = (row, now = new Date()) => {
   const quantity = Number(row.quantity || 0);
   const minimum = Number(row.minimum_stock || 0);
   if (quantity <= 0) return { key: 'out-of-stock', label: 'Out of stock' };
+  if (isExpired(row, now)) return { key: 'expired', label: 'Expired · unusable' };
   if (quantity <= minimum) return { key: 'low-stock', label: 'Low stock' };
   return { key: 'in-stock', label: 'In stock' };
 };
@@ -79,7 +84,7 @@ const downloadBlob = (blob, filename) => {
 
 const reportRows = (rows, now) => rows.map((item, index) => {
   const expiry = expirationInfo(item.expiration_date, now);
-  const stock = stockInfo(item);
+  const stock = stockInfo(item, now);
   return {
     index: index + 1,
     item_name: item.item_name || '',

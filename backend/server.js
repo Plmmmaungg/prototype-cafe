@@ -5,6 +5,7 @@ const morgan = require('morgan');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('./db');
+const { ensureConfiguredAccounts } = require('./accounts');
 const { auth, allow } = require('./middleware');
 const app = express();
 app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:5173' }));
@@ -15,6 +16,13 @@ const httpError=(message,status=400)=>{const error=new Error(message);error.stat
 const roundMoney=value=>Math.round((Number(value)||0)*100)/100;
 const INVENTORY_UNITS=['kg','g','liter','ml','pcs','bottle','pack','box','can','sack','tray','dozen','loaf','cup'];
 const INVENTORY_CATEGORIES=['Seafood','Meat','Vegetables','Fruits','Beverages','Dry Goods','Dairy','Coffee','Syrup','Packaging','Cleaning Supplies','Other Supplies'];
+const todayDateOnly=()=>{const date=new Date();return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;};
+function normalizeInventoryDate(value){
+  if(value===null||value===undefined||value==='')return null;
+  const text=String(value).slice(0,10);
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(text)||Number.isNaN(new Date(text+'T00:00:00').getTime()))throw httpError('Enter a valid expiration date.');
+  return text;
+}
 const RESERVATION_EVENT_TYPES=['Regular Dining','Birthday Celebration','Buffet','Private Event','Special Occasion'];
 function normalizeReservation(body){
   const customerName=String(body.customer_name||'').trim();
@@ -118,14 +126,15 @@ app.get('/api/notifications',auth,asyncRoute(async(req,res)=>{
   if(canSeeInventory){
     [lowStock]=await db.query(`SELECT id,item_name,category,unit,quantity,minimum_stock,expiration_date
       FROM inventory WHERE quantity <= minimum_stock
+      AND (expiration_date IS NULL OR expiration_date >= CURDATE())
       ORDER BY (quantity - minimum_stock) ASC, item_name ASC`);
     [expired]=await db.query(`SELECT id,item_name,category,unit,quantity,minimum_stock,expiration_date,
       DATEDIFF(CURDATE(),expiration_date) days_overdue
-      FROM inventory WHERE expiration_date IS NOT NULL AND expiration_date < CURDATE()
+      FROM inventory WHERE expiration_date IS NOT NULL AND expiration_date < CURDATE() AND quantity > 0
       ORDER BY expiration_date ASC, item_name ASC`);
     [expiring]=await db.query(`SELECT id,item_name,category,unit,quantity,minimum_stock,expiration_date,
       DATEDIFF(expiration_date,CURDATE()) days_remaining
-      FROM inventory WHERE expiration_date IS NOT NULL
+      FROM inventory WHERE expiration_date IS NOT NULL AND quantity > 0
       AND expiration_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 2 DAY)
       ORDER BY expiration_date ASC, item_name ASC`);
   }
@@ -210,6 +219,8 @@ app.delete('/api/promos/:id',auth,allow('Owner / Manager'),asyncRoute(async(req,
   res.json({message:'Promo deleted.'});
 }));
 app.get('/api/inventory',auth,allow('Owner / Manager','Inventory Personnel'),asyncRoute(async(req,res)=>{const [rows]=await db.query(`SELECT *,DATEDIFF(expiration_date,CURDATE()) days_remaining,
+  (expiration_date IS NOT NULL AND expiration_date < CURDATE()) AS is_expired,
+  CASE WHEN expiration_date IS NOT NULL AND expiration_date < CURDATE() THEN 0 ELSE quantity END AS usable_quantity,
   CASE WHEN expiration_date IS NULL THEN 'No expiration'
     WHEN expiration_date < CURDATE() THEN 'Expired'
     WHEN expiration_date <= DATE_ADD(CURDATE(), INTERVAL 2 DAY) THEN 'Expiring soon'
@@ -225,14 +236,84 @@ app.post('/api/inventory',auth,allow('Owner / Manager','Inventory Personnel'),as
   if(!Number.isFinite(quantityValue)||quantityValue<0)return res.status(400).json({message:'Quantity cannot be negative.'});
   if(!Number.isFinite(minimumValue)||minimumValue<0)return res.status(400).json({message:'Minimum stock cannot be negative.'});
   if(!Number.isFinite(costValue)||costValue<0)return res.status(400).json({message:'Purchase cost cannot be negative.'});
-  let expiration=null;
-  if(expiration_date){expiration=String(expiration_date).slice(0,10);if(!/^\d{4}-\d{2}-\d{2}$/.test(expiration)||Number.isNaN(new Date(expiration+'T00:00:00').getTime()))return res.status(400).json({message:'Enter a valid expiration date.'});}
+  const expiration=normalizeInventoryDate(expiration_date);
   const categoryValue=INVENTORY_CATEGORIES.includes(category)?category:'Other Supplies';
   const [r]=await db.execute('INSERT INTO inventory(item_name,category,unit,quantity,minimum_stock,purchase_cost,expiration_date) VALUES(?,?,?,?,?,?,?)',[name,categoryValue,unitValue,quantityValue,minimumValue,costValue,expiration]);
   await log(req.user.id,'Added inventory item','Inventory',r.insertId,name);
   res.status(201).json({id:r.insertId});
 }));
-app.post('/api/inventory/:id/movement',auth,allow('Owner / Manager','Inventory Personnel'),asyncRoute(async(req,res)=>{const {type,quantity,reason}=req.body;const amount=Number(quantity);if(!['Stock In','Stock Out'].includes(type)||!Number.isFinite(amount)||amount<=0)return res.status(400).json({message:'Enter a valid movement and quantity.'});const c=await db.getConnection();try{await c.beginTransaction();const [[item]]=await c.execute('SELECT * FROM inventory WHERE id=? FOR UPDATE',[req.params.id]);if(!item)throw new Error('Inventory item not found.');const next=item.quantity+(type==='Stock In'?amount:-amount);if(next<0)throw new Error('Insufficient stock. Stock cannot become negative.');await c.execute('UPDATE inventory SET quantity=? WHERE id=?',[next,item.id]);await c.execute('INSERT INTO stock_movements(inventory_id,user_id,movement_type,quantity,previous_quantity,new_quantity,reason) VALUES(?,?,?,?,?,?,?)',[item.id,req.user.id,type,amount,item.quantity,next,reason||'Manual adjustment']);await c.commit();await log(req.user.id,type,'Inventory',item.id,`${item.item_name}: ${amount} ${item.unit}`);res.json({message:'Stock updated.',quantity:next});}catch(e){await c.rollback();throw e;}finally{c.release();}}));
+app.put('/api/inventory/:id',auth,allow('Owner / Manager','Inventory Personnel'),asyncRoute(async(req,res)=>{
+  const [[existing]]=await db.execute('SELECT * FROM inventory WHERE id=? LIMIT 1',[req.params.id]);
+  if(!existing)return res.status(404).json({message:'Inventory item not found.'});
+  const name=req.body.item_name===undefined?existing.item_name:String(req.body.item_name||'').trim();
+  const unitValue=req.body.unit===undefined?existing.unit:String(req.body.unit||'').trim();
+  const categoryValue=req.body.category===undefined?existing.category:(INVENTORY_CATEGORIES.includes(req.body.category)?req.body.category:'Other Supplies');
+  const quantityValue=Number(req.body.minimum_stock===undefined?existing.minimum_stock:req.body.minimum_stock);
+  const costValue=Number(req.body.purchase_cost===undefined?existing.purchase_cost:req.body.purchase_cost);
+  const expiration=req.body.expiration_date===undefined?existing.expiration_date:normalizeInventoryDate(req.body.expiration_date);
+  if(!name)return res.status(400).json({message:'Item name is required.'});
+  if(!INVENTORY_UNITS.includes(unitValue))return res.status(400).json({message:'Choose a valid unit from the list.'});
+  if(!Number.isFinite(quantityValue)||quantityValue<0)return res.status(400).json({message:'Minimum stock cannot be negative.'});
+  if(!Number.isFinite(costValue)||costValue<0)return res.status(400).json({message:'Purchase cost cannot be negative.'});
+  const existingExpiration=existing.expiration_date?String(existing.expiration_date).slice(0,10):'';
+  const nextExpiration=expiration?String(expiration).slice(0,10):'';
+  const wasExpired=Boolean(existingExpiration)&&existingExpiration<todayDateOnly();
+  if(wasExpired&&Number(existing.quantity)>0&&nextExpiration!==existingExpiration)return res.status(400).json({message:'Remove the expired stock before changing this item’s expiration date.'});
+  await db.execute('UPDATE inventory SET item_name=?,category=?,unit=?,minimum_stock=?,purchase_cost=?,expiration_date=? WHERE id=?',[name,categoryValue,unitValue,quantityValue,costValue,expiration,existing.id]);
+  await log(req.user.id,'Updated inventory item','Inventory',existing.id,name);
+  res.json({message:'Inventory item updated.',item:{id:existing.id,item_name:name,category:categoryValue,unit:unitValue,minimum_stock:quantityValue,purchase_cost:costValue,expiration_date:expiration}});
+}));
+app.post('/api/inventory/:id/movement',auth,allow('Owner / Manager','Inventory Personnel'),asyncRoute(async(req,res)=>{
+  const type=req.body.type;
+  const amount=Number(req.body.quantity);
+  if(!['Stock In','Stock Out'].includes(type)||!Number.isFinite(amount)||amount<=0)return res.status(400).json({message:'Enter a valid movement and quantity.'});
+  const requestedExpiration=normalizeInventoryDate(req.body.expiration_date);
+  if(requestedExpiration&&requestedExpiration<todayDateOnly())return res.status(400).json({message:'The new batch expiration date cannot be in the past.'});
+  const c=await db.getConnection();
+  try{
+    await c.beginTransaction();
+    const [[item]]=await c.execute('SELECT *,(expiration_date IS NOT NULL AND expiration_date < CURDATE()) AS is_expired FROM inventory WHERE id=? FOR UPDATE',[req.params.id]);
+    if(!item)throw httpError('Inventory item not found.',404);
+    const expired=Boolean(item.is_expired);
+    let next;
+    let newExpiration=item.expiration_date?String(item.expiration_date).slice(0,10):null;
+    if(type==='Stock In'){
+      if(expired&&Number(item.quantity)>0)throw httpError('Remove the expired stock before restocking this item.');
+      if(expired&&!requestedExpiration)throw httpError('Enter the new batch expiration date for this replacement stock.');
+      if(requestedExpiration)newExpiration=requestedExpiration;
+      next=Number(item.quantity)+amount;
+    }else{
+      if(expired)throw httpError('This item has expired. Use Remove expired stock to clear it from usable inventory.');
+      if(amount>Number(item.quantity))throw httpError(`Only ${Number(item.quantity)} ${item.unit} of ${item.item_name} is available.`);
+      next=Number(item.quantity)-amount;
+    }
+    await c.execute('UPDATE inventory SET quantity=?,expiration_date=? WHERE id=?',[next,newExpiration,item.id]);
+    const reason=type==='Stock In'?'Stock In':'Stock Out';
+    await c.execute('INSERT INTO stock_movements(inventory_id,user_id,movement_type,quantity,previous_quantity,new_quantity,reason) VALUES(?,?,?,?,?,?,?)',[item.id,req.user.id,type,amount,item.quantity,next,reason]);
+    await c.commit();
+    await log(req.user.id,type,'Inventory',item.id,`${item.item_name}: ${amount} ${item.unit}`);
+    res.json({message:'Stock updated.',id:item.id,quantity:next,previous_quantity:Number(item.quantity),expiration_date:newExpiration,movement_type:type});
+  }catch(e){await c.rollback();throw e;}finally{c.release();}
+}));
+app.post('/api/inventory/:id/remove-expired',auth,allow('Owner / Manager','Inventory Personnel'),asyncRoute(async(req,res)=>{
+  const amount=Number(req.body.quantity);
+  if(!Number.isFinite(amount)||amount<=0)return res.status(400).json({message:'Enter a valid expired quantity.'});
+  const c=await db.getConnection();
+  try{
+    await c.beginTransaction();
+    const [[item]]=await c.execute('SELECT *,(expiration_date IS NOT NULL AND expiration_date < CURDATE()) AS is_expired FROM inventory WHERE id=? FOR UPDATE',[req.params.id]);
+    if(!item)throw httpError('Inventory item not found.',404);
+    if(!item.is_expired)throw httpError('This item is not expired.');
+    if(Number(item.quantity)<=0)throw httpError('There is no expired stock left to remove.');
+    if(amount>Number(item.quantity))throw httpError(`Only ${Number(item.quantity)} ${item.unit} of ${item.item_name} is available.`);
+    const next=Number(item.quantity)-amount;
+    await c.execute('UPDATE inventory SET quantity=? WHERE id=?',[next,item.id]);
+    await c.execute('INSERT INTO stock_movements(inventory_id,user_id,movement_type,quantity,previous_quantity,new_quantity,reason) VALUES(?,?,?,?,?,?,?)',[item.id,req.user.id,'Stock Out',amount,item.quantity,next,'Expired stock removed']);
+    await c.commit();
+    await log(req.user.id,'Removed expired stock','Inventory',item.id,`${item.item_name}: ${amount} ${item.unit} expired stock removed`);
+    res.json({message:'Expired stock removed.',id:item.id,quantity:next,previous_quantity:Number(item.quantity),expiration_date:item.expiration_date?String(item.expiration_date).slice(0,10):null,movement_type:'Stock Out'});
+  }catch(e){await c.rollback();throw e;}finally{c.release();}
+}));
 app.get('/api/orders',auth,allow('Owner / Manager','Cashier / Service Staff','Kitchen Personnel'),asyncRoute(async(req,res)=>{const [rows]=req.user.role==='Kitchen Personnel'?await db.query("SELECT * FROM orders WHERE status IN ('Confirmed','Preparing','Ready') ORDER BY created_at ASC"):await db.query('SELECT * FROM orders ORDER BY created_at DESC');res.json(rows)}));
 app.get('/api/orders/:id',auth,allow('Owner / Manager','Cashier / Service Staff','Kitchen Personnel'),asyncRoute(async(req,res)=>{
   const [[order]]=await db.execute('SELECT * FROM orders WHERE id=? LIMIT 1',[req.params.id]);
@@ -331,4 +412,14 @@ app.get('/api/waste',auth,allow('Owner / Manager','Inventory Personnel'),asyncRo
 app.post('/api/waste',auth,allow('Owner / Manager','Inventory Personnel'),asyncRoute(async(req,res)=>{const {inventory_id,quantity,category,reason}=req.body;const amount=Number(quantity);if(!inventory_id||!amount||amount<=0)return res.status(400).json({message:'Select an item and enter a valid quantity.'});const c=await db.getConnection();try{await c.beginTransaction();const [[item]]=await c.execute('SELECT * FROM inventory WHERE id=? FOR UPDATE',[inventory_id]);if(!item||item.quantity<amount)throw new Error('Insufficient inventory for this waste record.');const cost=Number(item.purchase_cost)*amount;await c.execute('UPDATE inventory SET quantity=quantity-? WHERE id=?',[amount,inventory_id]);const [r]=await c.execute('INSERT INTO waste_records(inventory_id,user_id,quantity,category,reason,estimated_cost) VALUES(?,?,?,?,?,?)',[inventory_id,req.user.id,amount,category||'Spoiled',reason||'',cost]);await c.execute("INSERT INTO stock_movements(inventory_id,user_id,movement_type,quantity,previous_quantity,new_quantity,reason) VALUES(?,?,?,?,?,?,?)",[inventory_id,req.user.id,'Waste',amount,item.quantity,item.quantity-amount,reason||'Waste record']);await c.commit();await log(req.user.id,'Recorded food waste','Waste',r.insertId,item.item_name);res.status(201).json({id:r.insertId,estimated_cost:cost});}catch(e){await c.rollback();throw e;}finally{c.release();}}));
 app.get('/api/activity',auth,allow('Owner / Manager'),asyncRoute(async(req,res)=>{const [rows]=await db.query('SELECT a.*,u.name employee_name FROM activity_logs a LEFT JOIN users u ON u.id=a.user_id ORDER BY a.created_at DESC LIMIT 200');res.json(rows)}));
 app.use((err,req,res,next)=>{console.error(err);res.status(err.status||500).json({message:err.message||'Internal server error.'});});
-const PORT=process.env.PORT||5000;app.listen(PORT,()=>console.log(`Cafe Munaco API listening on port ${PORT}`));
+const PORT=process.env.PORT||5000;
+(async()=>{
+  try{
+    const accounts=await ensureConfiguredAccounts();
+    console.log('Login accounts ready:');
+    for(const account of accounts)console.log(`  ${account.role}: ${account.email}`);
+  }catch(error){
+    console.error('Login account provisioning failed:',error.message);
+  }
+  app.listen(PORT,()=>console.log(`Cafe Munaco API listening on port ${PORT}`));
+})();

@@ -6,18 +6,18 @@ A runnable React + Express + MySQL starter application based on the supplied Caf
 
 - Premium responsive coffee/cream/gold management interface.
 - Full point-of-sale screen for Owner / Manager and Cashier: product image grid, cart, promo selection, cash/GCash/card payment, change calculation, printable receipt, and required customer name/cash-received validation. The order-summary cart stays within the desktop viewport and keeps payment controls visible while the order list scrolls.
-- Working topbar low-stock notifications: a live alert count, item list with current/minimum stock, manual refresh, and a direct link to Inventory for permitted roles.
+- Working topbar notifications for low stock, expired/expiring inventory, and upcoming reservations, with a live count, click-through filters, and dismissal state that persists across refreshes.
 - Product image upload and product management (add, edit, archive, restore).
 - Promo management for Owner / Manager: create, edit, delete, target a product or the whole order, and set start/expiry date and time. Expired promos disappear from the POS automatically.
 - Login with JWT and bcrypt password verification.
-- Three seeded demo roles: Owner / Manager, Cashier / Service Staff, and Kitchen Personnel.
+- Three role-based staff accounts (Owner / Manager, Cashier / Service Staff, and Kitchen Personnel) provisioned automatically on backend startup.
 - Role-filtered navigation and protected frontend routes, plus backend permission checks for dashboard, products, orders, reservations, inventory, waste, and activity logs.
 - Cashier order/reservation workflow and kitchen-only preparation status workflow.
 - Owner dashboard with live MySQL summary, recent orders, and a 7-day sales chart.
 - Product/menu creation and archive endpoint.
-- Inventory creation, stock-in, stock-out, low-stock indication, and movement history writes.
+- Inventory creation, stock-in/stock-out modals, expiration and expired-stock controls, low-stock indication, Excel/print output, and movement history writes.
 - Order creation, order list, status transition validation, and kitchen queue view.
-- Reservation creation/list.
+- Reservation creation, editing/rescheduling, status workflow, and 11-digit contact validation.
 - Food waste recording that deducts inventory in a database transaction.
 - Owner activity log view.
 - Importable MySQL schema with clearly identified demonstration menu and inventory rows.
@@ -68,18 +68,28 @@ DB_NAME=cafe_munaco_db
 DB_PORT=3307
 JWT_SECRET=replace_this_with_a_long_random_secret
 CLIENT_URL=http://localhost:5173
+
+# Role-based accounts, applied automatically on backend startup.
+OWNER_NAME=Cafe Munaco Owner
+OWNER_EMAIL=owner@your-cafe.local
+OWNER_PASSWORD="replace-with-a-strong-password"
+CASHIER_NAME=Cafe Munaco Cashier
+CASHIER_EMAIL=cashier@your-cafe.local
+CASHIER_PASSWORD="replace-with-a-strong-password"
+KITCHEN_NAME=Cafe Munaco Kitchen
+KITCHEN_EMAIL=kitchen@your-cafe.local
+KITCHEN_PASSWORD="replace-with-a-strong-password"
 ```
 
-If your MySQL root account has a password, put it after `DB_PASSWORD=`. Change `JWT_SECRET` to a long random value before using real accounts.
+If your MySQL root account has a password, put it after `DB_PASSWORD=`. Change `JWT_SECRET` to a long random value before using real accounts. Quote passwords that contain `#`, `$`, or other shell-sensitive characters.
 
-Then install backend packages and create/reset the three demo accounts:
+Then install the backend packages:
 
 ```powershell
 npm install
-npm run seed
 ```
 
-The seed command prints the demo login credentials when successful.
+The backend creates or updates the three login accounts from `.env` every time it starts. Running `npm run seed` is optional and simply re-applies the same account values.
 
 ## 4. Start the backend
 
@@ -111,17 +121,19 @@ Open the Vite URL shown in the terminal, normally:
 
 `http://localhost:5173`
 
-## 6. Demo accounts
+## 6. Staff accounts
 
-Run `npm run seed` in the `backend` folder. It creates or resets these three local demo accounts (passwords are stored as bcrypt hashes):
+The backend provisions three real login accounts from `backend/.env` on startup. No seed command is required.
 
-| Role | Email | Password |
-|---|---|---|
-| Owner / Manager | `admin@cafemunaco.local` | `CafeMunaco123!` |
-| Cashier / Service Staff | `cashier@cafemunaco.local` | `Cashier123!` |
-| Kitchen Personnel | `kitchen@cafemunaco.local` | `Kitchen123!` |
+| Role | Required settings |
+|---|---|
+| Owner / Manager | `OWNER_NAME`, `OWNER_EMAIL`, `OWNER_PASSWORD` |
+| Cashier / Service Staff | `CASHIER_NAME`, `CASHIER_EMAIL`, `CASHIER_PASSWORD` |
+| Kitchen Personnel | `KITCHEN_NAME`, `KITCHEN_EMAIL`, `KITCHEN_PASSWORD` |
 
-These are demonstration credentials. Change them before using the system with real business data. Re-running `npm run seed` resets the demo passwords to the values above.
+Passwords are stored in MySQL as bcrypt hashes. To change an account name, email, or password, edit the matching values in `backend/.env` and restart the backend. Keep `.env` private and do not commit it.
+
+Existing installations are upgraded in place: the previous demo rows are converted to the configured accounts, preserving their database IDs and related order, reservation, and activity history. Any remaining old demo login is deactivated.
 
 ### Updating an existing database for POS + promos
 
@@ -158,8 +170,10 @@ The sidebar is filtered by role, direct frontend URL access is redirected, and b
 - Confirm `cafe_munaco_db` exists in phpMyAdmin.
 
 **Login says invalid email or password**
-- Run `npm run seed` again from the `backend` folder.
-- Confirm the seed command completed without an error.
+- Confirm the role's `*_EMAIL` and `*_PASSWORD` values in `backend/.env`.
+- Restart the backend; it re-applies the configured accounts on startup.
+- Check the backend terminal for a `Login account provisioning failed` message.
+- Running `npm run seed` is optional and applies the same `.env` account values.
 
 **Frontend cannot connect**
 - Keep the backend running on port 5000.
@@ -189,6 +203,7 @@ cafe-munaco/
 │   ├── package.json
 │   └── vite.config.js
 ├── backend/
+│   ├── accounts.js
 │   ├── db.js
 │   ├── middleware.js
 │   ├── server.js
